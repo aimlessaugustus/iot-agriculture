@@ -1,0 +1,12 @@
+# Arduino secrets file containing WiFi credentials
+src/arduino_secrets.h
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+*.swp
+*.swo
+*~
