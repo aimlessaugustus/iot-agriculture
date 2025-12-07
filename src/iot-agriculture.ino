@@ -6,6 +6,11 @@
 char ssid[] = SECRET_SSID;
 char password[] = SECRET_PASS;
 
+// Simple HTTP server on port 80
+WiFiServer server(80);
+// Mobile-friendly Bootstrap landing page is stored in a separate header
+#include "index_page.h"
+
 void setup()
 {
     Serial.begin(9600);
@@ -51,6 +56,11 @@ void setup()
         Serial.print("Signal strength (RSSI): ");
         Serial.print(WiFi.RSSI());
         Serial.println(" dBm");
+        // Start HTTP server
+        server.begin();
+        Serial.print("HTTP server started. Open http://");
+        Serial.print(WiFi.localIP());
+        Serial.println(" on your phone or computer.");
     }
     else
     {
@@ -64,5 +74,54 @@ void setup()
 
 void loop()
 {
-    //main code here
+    // Handle incoming HTTP clients
+    WiFiClient client = server.available();
+    if (!client) {
+        delay(10);
+        return;
+    }
+
+    Serial.println("New HTTP client");
+
+    // Read request (with short timeout)
+    String request = "";
+    unsigned long start = millis();
+    while (client.connected() && (millis() - start) < 2000) {
+        while (client.available()) {
+            char c = client.read();
+            request += c;
+            if (request.endsWith("\r\n\r\n")) break;
+        }
+        if (request.endsWith("\r\n\r\n")) break;
+    }
+
+    Serial.println("Request:");
+    Serial.println(request);
+
+    // Simple routing
+    if (request.indexOf("GET /status") >= 0) {
+        // Return JSON status
+        String ip = WiFi.localIP().toString();
+        bool connected = (WiFi.status() == WL_CONNECTED);
+
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.print("{\"connected\":");
+        client.print(connected ? "true" : "false");
+        client.print(",\"ip\":\"");
+        if (connected) client.print(ip);
+        client.print("\"}");
+    } else {
+        // Serve index page
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: text/html; charset=utf-8");
+        client.println("Connection: close");
+        client.println();
+        client.println(INDEX_PAGE);
+    }
+
+    delay(1);
+    client.stop();
 }
