@@ -3,6 +3,9 @@
 #include <RTClib.h>
 #include <WiFiUdp.h>
 #include <NTPClient.h>
+// I2C LCD
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
 // WiFi credentials are stored in arduino_secrets.h
 // arduino_secrets.h is in .gitignore to secure credentials.
@@ -21,6 +24,9 @@ bool rtcPresent = false;
 // NTP client (uses NTPClient library)
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "uk.pool.ntp.org", 0, 60000); // UTC, refresh every 60s
+
+// I2C LCD (common I2C address 0x27; change if your module uses 0x3F)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // Days in month helper
 int daysInMonth(int year, int month) {
@@ -72,6 +78,14 @@ void setup()
     Serial.println("=== Arduino R4 WiFi - Starting ===");
     Serial.println("Serial communication initialized");
     delay(1000);
+
+    // Initialize I2C and LCD for quick hardware test
+    Wire.begin(); // SDA -> A4, SCL -> A5 on Uno/R4
+    lcd.init();
+    lcd.backlight();
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Hello world");
 
     // Initialize RTC
     Serial.println("Initializing RTC...");
