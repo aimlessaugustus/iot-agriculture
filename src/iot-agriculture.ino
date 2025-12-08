@@ -6,9 +6,9 @@
 char ssid[] = SECRET_SSID;
 char password[] = SECRET_PASS;
 
-// Simple HTTP server on port 80
+//HTTP server on port 80
 WiFiServer server(80);
-// Mobile-friendly Bootstrap landing page is stored in a separate header
+// Bootstrap Dashboard is stored in a separate header
 #include "index_page.h"
 
 void setup()
@@ -23,7 +23,7 @@ void setup()
     Serial.println("Serial communication initialized");
     delay(1000);
 
-    // Verify Integrity of WiDI Module on Board
+    // Verify Integrity of WiFi Module on Board
     Serial.println("Checking for WiFi module...");
     if (WiFi.status() == WL_NO_MODULE)
     {
