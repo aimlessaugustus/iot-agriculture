@@ -13,10 +13,18 @@ const char* INDEX_PAGE = R"rawliteral(
     <div class="text-center">
         <h1 class="display-6">IoT Agriculture Device</h1>
         <p class="lead">Arduino R4 WiFi</p>
-        <div id="status" class="mb-3">
-            <strong>Status:</strong> <span id="wifi">Loading…</span>
+        <div class="row gy-3">
+            <div class="col-12 col-md-6 offset-md-3">
+                <div class="card">
+                    <div class="card-body text-center">
+                        <h5 class="card-title">Device Status</h5>
+                        <p class="card-text"><strong>Wi-Fi:</strong> <span id="wifi">Loading…</span></p>
+                        <p class="card-text"><strong>Time:</strong> <span id="datetime">Loading…</span></p>
+                        <a href="#" class="btn btn-primary" onclick="location.reload()">Refresh</a>
+                    </div>
+                </div>
+            </div>
         </div>
-        <a href="#" class="btn btn-primary" onclick="location.reload()">Refresh</a>
     </div>
 </div>
 <script>
@@ -30,6 +38,18 @@ async function fetchStatus(){
     }
 }
 fetchStatus();
+// fetch time and update every 60 seconds
+async function fetchTime(){
+    try{
+        const r = await fetch('/time');
+        const j = await r.json();
+        document.getElementById('datetime').textContent = j.datetime || 'N/A';
+    }catch(e){
+        document.getElementById('datetime').textContent = 'Error';
+    }
+}
+fetchTime();
+setInterval(fetchTime, 60000);
 </script>
 </body>
 </html>
