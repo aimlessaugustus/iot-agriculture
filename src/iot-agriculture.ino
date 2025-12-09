@@ -5,6 +5,7 @@
 #include <NTPClient.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <DHT.h>
 
 // === Configuration ===
 // Wi‑Fi credentials are kept in `arduino_secrets.h` (excluded from version control).
@@ -29,6 +30,16 @@ NTPClient timeClient(ntpUDP, "uk.pool.ntp.org", 0, 60000);
 // === Local display (I2C) ===
 // An I2C LCD module is supported (common address 0x27). SDA=A4, SCL=A5 on Uno/R4.
 LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// === DHT sensor ===
+// DHT11 sensor is attached to a digital pin. Change `DHTPIN` if needed.
+#define DHTPIN 5
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// Display update timing
+unsigned long lastDisplay = 0;
+const unsigned long displayInterval = 5000; // 5 seconds
 
 // === Time helpers (BST calculation) ===
 // Helper returns the number of days in a month (handles leap years).
@@ -92,6 +103,9 @@ void setup()
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("Hello world");
+
+    // Initialise DHT sensor
+    dht.begin();
 
     // Initialise RTC
     Serial.println("Initialising RTC...");
@@ -172,6 +186,30 @@ void setup()
 
 void loop()
 {
+    // Update LCD with sensor data at a controlled interval
+    unsigned long now = millis();
+    if (now - lastDisplay >= displayInterval) {
+        lastDisplay = now;
+
+        float h = dht.readHumidity();
+        float t = dht.readTemperature(); // Celsius
+
+        lcd.clear();
+        if (isnan(h) || isnan(t)) {
+            lcd.setCursor(0, 0);
+            lcd.print("DHT error");
+            lcd.setCursor(0, 1);
+            lcd.print("Check sensor");
+        } else {
+            lcd.setCursor(0, 0);
+            lcd.print("T:");
+            lcd.print(t, 1);
+            lcd.print("C ");
+            lcd.print("H:");
+            lcd.print(h, 0);
+            lcd.print("%");
+        }
+    }
     // Handle incoming HTTP clients
     WiFiClient client = server.available();
     if (!client) {
