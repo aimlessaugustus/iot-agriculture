@@ -41,6 +41,10 @@ DHT dht(DHTPIN, DHTTYPE);
 unsigned long lastDisplay = 0;
 const unsigned long displayInterval = 5000; // 5 seconds
 
+// Latest sensor values (updated when DHT is read)
+float lastTemp = NAN;
+float lastHum = NAN;
+
 // === Time helpers (BST calculation) ===
 // Helper returns the number of days in a month (handles leap years).
 int daysInMonth(int year, int month) {
@@ -194,6 +198,10 @@ void loop()
         float h = dht.readHumidity();
         float t = dht.readTemperature(); // Celsius
 
+        // Update stored sensor values so the web endpoint can report them
+        lastTemp = t;
+        lastHum = h;
+
         lcd.clear();
         if (isnan(h) || isnan(t)) {
             lcd.setCursor(0, 0);
@@ -249,6 +257,18 @@ void loop()
         client.print(",\"ip\":\"");
         if (connected) client.print(ip);
         client.print("\"}");
+    }
+    // Sensor endpoint returns latest DHT readings
+    else if (request.indexOf("GET /sensor") >= 0) {
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.print("{\"temperature\":");
+        if (!isnan(lastTemp)) client.print(lastTemp, 1); else client.print("null");
+        client.print(",\"humidity\":");
+        if (!isnan(lastHum)) client.print(lastHum, 0); else client.print("null");
+        client.print("}");
     }
     else if (request.indexOf("GET /time") >= 0) {
         // Update NTP client and get UTC epoch

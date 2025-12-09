@@ -20,6 +20,8 @@ const char* INDEX_PAGE = R"rawliteral(
                         <h5 class="card-title">Device Status</h5>
                         <p class="card-text"><strong>Wi-Fi:</strong> <span id="wifi">Loading…</span></p>
                         <p class="card-text"><strong>Time:</strong> <span id="datetime">Loading…</span></p>
+                        <p class="card-text"><strong>Temperature:</strong> <span id="temp">Loading…</span></p>
+                        <p class="card-text"><strong>Humidity:</strong> <span id="hum">Loading…</span></p>
                         <a href="#" class="btn btn-primary" onclick="location.reload()">Refresh</a>
                     </div>
                 </div>
@@ -50,6 +52,21 @@ async function fetchTime(){
 }
 fetchTime();
 setInterval(fetchTime, 60000);
+
+// fetch sensor data and update every 5 seconds
+async function fetchSensor(){
+    try{
+        const r = await fetch('/sensor');
+        const j = await r.json();
+        document.getElementById('temp').textContent = j.temperature !== null ? (j.temperature + ' °C') : 'N/A';
+        document.getElementById('hum').textContent = j.humidity !== null ? (j.humidity + ' %') : 'N/A';
+    }catch(e){
+        document.getElementById('temp').textContent = 'Error';
+        document.getElementById('hum').textContent = 'Error';
+    }
+}
+fetchSensor();
+setInterval(fetchSensor, 5000);
 </script>
 </body>
 </html>
