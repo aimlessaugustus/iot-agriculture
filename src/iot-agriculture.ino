@@ -3,35 +3,38 @@
 #include <RTClib.h>
 #include <WiFiUdp.h>
 #include <NTPClient.h>
-// I2C LCD
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
-// WiFi credentials are stored in arduino_secrets.h
-// arduino_secrets.h is in .gitignore to secure credentials.
+// === Configuration ===
+// Wi‑Fi credentials are kept in `arduino_secrets.h` (excluded from version control).
 char ssid[] = SECRET_SSID;
 char password[] = SECRET_PASS;
 
-//HTTP server on port 80
+// === HTTP server ===
+// The sketch serves a simple dashboard and status endpoints over HTTP port 80.
 WiFiServer server(80);
-// Bootstrap Dashboard is stored in a separate header
+// Dashboard HTML is provided in `index_page.h` as a raw string literal.
 #include "index_page.h"
 
-// RTC (using RTClib)
+// === Time sources ===
+// Hardware RTC (DS3231) is initialised. NTP is used as the primary time source.
 RTC_DS3231 rtc;
 bool rtcPresent = false;
 
-// NTP client (uses NTPClient library)
+// NTP client (UTC). The client refreshes every 60 seconds.
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "uk.pool.ntp.org", 0, 60000); // UTC, refresh every 60s
+NTPClient timeClient(ntpUDP, "uk.pool.ntp.org", 0, 60000);
 
-// I2C LCD (common I2C address 0x27; change if your module uses 0x3F)
+// === Local display (I2C) ===
+// An I2C LCD module is supported (common address 0x27). SDA=A4, SCL=A5 on Uno/R4.
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-// Days in month helper
+// === Time helpers (BST calculation) ===
+// Helper returns the number of days in a month (handles leap years).
 int daysInMonth(int year, int month) {
     if (month == 2) {
-        // leap year
+        // Check leap year
         bool leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
         return leap ? 29 : 28;
     }
@@ -39,29 +42,31 @@ int daysInMonth(int year, int month) {
     return mdays[month];
 }
 
-// Compute whether given UTC epoch falls in British Summer Time (BST)
+// Determines whether a UTC epoch is within BST by computing the last Sunday of March
+// and the last Sunday of October for the epoch's year and compares the instant
+// against those transition instants (BST starts/ends at 01:00 UTC).
 bool isBST(unsigned long utcEpoch) {
     DateTime dt(utcEpoch);
     int year = dt.year();
 
-    // find last Sunday in March
+    // Find last Sunday in March
     int lastDayMar = daysInMonth(year, 3);
     DateTime lastMar(year, 3, lastDayMar, 0, 0, 0);
-    int wd = (lastMar.unixtime() / 86400 + 4) % 7; // 0 = Sunday
+    int wd = (lastMar.unixtime() / 86400 + 4) % 7;
     int lastSundayMar = lastDayMar - wd;
-    unsigned long bstStart = DateTime(year, 3, lastSundayMar, 1, 0, 0).unixtime(); // 01:00 UTC
+    unsigned long bstStart = DateTime(year, 3, lastSundayMar, 1, 0, 0).unixtime();
 
-    // find last Sunday in October
+    // Find last Sunday in October
     int lastDayOct = daysInMonth(year, 10);
     DateTime lastOct(year, 10, lastDayOct, 0, 0, 0);
     wd = (lastOct.unixtime() / 86400 + 4) % 7;
     int lastSundayOct = lastDayOct - wd;
-    unsigned long bstEnd = DateTime(year, 10, lastSundayOct, 1, 0, 0).unixtime(); // 01:00 UTC
+    unsigned long bstEnd = DateTime(year, 10, lastSundayOct, 1, 0, 0).unixtime();
 
     return (utcEpoch >= bstStart && utcEpoch < bstEnd);
 }
 
-// Return local UK epoch (applying BST if needed)
+// Converts a UTC epoch to a local UK epoch by applying a +1 hour offset when BST applies.
 unsigned long ukLocalEpoch(unsigned long utcEpoch) {
     if (isBST(utcEpoch)) return utcEpoch + 3600;
     return utcEpoch;
@@ -70,38 +75,39 @@ unsigned long ukLocalEpoch(unsigned long utcEpoch) {
 void setup()
 {
     Serial.begin(9600);
+    // Wait for serial port to connect (3 second timeout)
     while (!Serial && millis() < 3000)
     {
-        ; // Wait for serial port to connect, with 3 second timeout
+        ;
     }
 
     Serial.println("=== Arduino R4 WiFi - Starting ===");
-    Serial.println("Serial communication initialized");
+    Serial.println("Serial communication initialised");
     delay(1000);
 
-    // Initialize I2C and LCD for quick hardware test
-    Wire.begin(); // SDA -> A4, SCL -> A5 on Uno/R4
+    // Initialise I2C and LCD for hardware test
+    Wire.begin();
     lcd.init();
     lcd.backlight();
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("Hello world");
 
-    // Initialize RTC
-    Serial.println("Initializing RTC...");
+    // Initialise RTC
+    Serial.println("Initialising RTC...");
     if (!rtc.begin()) {
         Serial.println("RTC not found - continuing without hardware RTC");
         rtcPresent = false;
     } else {
         rtcPresent = true;
-        Serial.println("RTC initialized");
+        Serial.println("RTC initialised");
         if (rtc.lostPower()) {
             Serial.println("RTC lost power; consider setting it or allow NTP to initialise it");
 
         }
     }
 
-    // Verify Integrity of WiFi Module on Board
+    // Verify WiFi module presence
     Serial.println("Checking for WiFi module...");
     if (WiFi.status() == WL_NO_MODULE)
     {
@@ -111,13 +117,13 @@ void setup()
     }
     Serial.println("WiFi module detected successfully");
 
-    // Connect to WiFi
+    // Connect to WiFi (10 second timeout)
     Serial.print("Connecting to WiFi network: ");
     Serial.println(ssid);
 
     int status = WL_IDLE_STATUS;
     unsigned long startAttemptTime = millis();
-    const unsigned long timeout = 10000; // 10 second timeout
+    const unsigned long timeout = 10000;
 
     while (status != WL_CONNECTED && millis() - startAttemptTime < timeout)
     {
@@ -175,7 +181,7 @@ void loop()
 
     Serial.println("New HTTP client");
 
-    // Read request (with short timeout)
+    // Read request (2 second timeout)
     String request = "";
     unsigned long start = millis();
     while (client.connected() && (millis() - start) < 2000) {
@@ -190,9 +196,9 @@ void loop()
     Serial.println("Request:");
     Serial.println(request);
 
-    // Simple routing
+    // Simple request routing
     if (request.indexOf("GET /status") >= 0) {
-        // Return JSON status
+        // Return JSON status object
         String ip = WiFi.localIP().toString();
         bool connected = (WiFi.status() == WL_CONNECTED);
 
@@ -207,20 +213,20 @@ void loop()
         client.print("\"}");
     }
     else if (request.indexOf("GET /time") >= 0) {
-        // Update NTP client and get current UTC epoch
+        // Update NTP client and get UTC epoch
         timeClient.update();
         unsigned long nowEpoch = timeClient.getEpochTime();
 
-        // fallback to RTC if NTP not available
+        // Fallback to RTC when NTP is unavailable
         if (nowEpoch == 0 && rtcPresent) {
             nowEpoch = rtc.now().unixtime();
         }
 
-        // Compute UK local time (apply BST if needed)
+        // Compute UK-local epoch (apply BST when needed)
         unsigned long local = ukLocalEpoch(nowEpoch);
         DateTime localDT(local);
 
-        // DD/MM/YYYY HH:MM (24-hour)
+        // Format datetime as DD/MM/YYYY HH:MM (24-hour)
         char buf[32];
         snprintf(buf, sizeof(buf), "%02u/%02u/%04u %02u:%02u",
                  localDT.day(), localDT.month(), localDT.year(), localDT.hour(), localDT.minute());
@@ -234,7 +240,7 @@ void loop()
         client.print("\"}");
     }
     else {
-        // Serve index page
+        // Serve index page (dashboard HTML)
         client.println("HTTP/1.1 200 OK");
         client.println("Content-Type: text/html; charset=utf-8");
         client.println("Connection: close");
