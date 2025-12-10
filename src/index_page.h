@@ -1,4 +1,4 @@
-// Mobile-friendly Bootstrap landing page
+// Provide mobile-friendly Bootstrap landing page
 const char* INDEX_PAGE = R"rawliteral(
 <!doctype html>
 <html lang="en">
@@ -24,6 +24,10 @@ const char* INDEX_PAGE = R"rawliteral(
                         <p class="card-text"><strong>Humidity:</strong> <span id="hum">Loading…</span></p>
                         <p class="card-text"><strong>Water level:</strong> <span id="level">Loading…</span></p>
                         <p class="card-text"><strong>Pump:</strong> <span id="pump">Loading…</span></p>
+                        <p class="card-text"><strong>Camera:</strong></p>
+                        <div class="ratio ratio-16x9 mb-2">
+                            <img id="cam" src="/image?t=0" alt="Camera" style="width:100%;height:100%;object-fit:cover;" />
+                        </div>
                         <a href="#" class="btn btn-primary" onclick="location.reload()">Refresh</a>
                     </div>
                 </div>
@@ -42,7 +46,7 @@ async function fetchStatus(){
     }
 }
 fetchStatus();
-// fetch time and update every 60 seconds
+// Fetch time and update every 60 seconds
 async function fetchTime(){
     try{
         const r = await fetch('/time');
@@ -55,7 +59,7 @@ async function fetchTime(){
 fetchTime();
 setInterval(fetchTime, 60000);
 
-// fetch sensor data and update every 5 seconds
+// Fetch sensor data and update every 5 seconds
 async function fetchSensor(){
     try{
         const r = await fetch('/sensor');
@@ -72,6 +76,19 @@ async function fetchSensor(){
 }
 fetchSensor();
 setInterval(fetchSensor, 5000);
+
+// Fetch camera image less frequently to reduce load and add timestamp to bypass cache
+async function fetchImage(){
+    try{
+        const timestamp = Date.now();
+        document.getElementById('cam').src = '/image?t=' + timestamp;
+    }catch(e){
+        // Ignore image fetch errors
+    }
+}
+fetchImage();
+// Update image every 15 seconds to reduce device and network load
+setInterval(fetchImage, 15000);
 </script>
 </body>
 </html>

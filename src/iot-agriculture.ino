@@ -1,11 +1,16 @@
 #include <WiFiS3.h>
 #include "arduino_secrets.h"
-#include <RTClib.h>
+// Use NTP instead of the RTC library to save RAM
 #include <WiFiUdp.h>
 #include <NTPClient.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
+// Camera (ArduCAM Mini OV2640)
+// Using R4-compatible fork: https://github.com/keeeal/ArduCAM-Arduino-Uno-R4
+#include <SPI.h>
+#include "memorysaver.h"
+#include <ArduCAM.h>
 
 // === Configuration ===
 // Wi‑Fi credentials are kept in `arduino_secrets.h` (excluded from version control).
@@ -13,81 +18,114 @@ char ssid[] = SECRET_SSID;
 char password[] = SECRET_PASS;
 
 // === HTTP server ===
-// The sketch serves a simple dashboard and status endpoints over HTTP port 80.
+// Serve a simple dashboard and status endpoints on HTTP port 80
 WiFiServer server(80);
-// Dashboard HTML is provided in `index_page.h` as a raw string literal.
+// Provide dashboard HTML via `index_page.h`
 #include "index_page.h"
 
 // === Time sources ===
-// Hardware RTC (DS3231) is initialised. NTP is used as the primary time source.
-RTC_DS3231 rtc;
+// Use NTP as the primary time source
 bool rtcPresent = false;
 
-// NTP client (UTC). The client refreshes every 60 seconds.
+// Use NTP client in UTC and refresh every 60 seconds
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "uk.pool.ntp.org", 0, 60000);
 
 // === Local display (I2C) ===
-// An I2C LCD module is supported (common address 0x27). SDA is A4 and SCL is A5 on Uno/R4.
+// Support I2C LCD at address 0x27. SDA is A4 and SCL is A5
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
+// === ArduCAM configuration ===
+// SPI pins: SCK=D13 MISO=D12 MOSI=D11 CS=D10. Share I2C with LCD for SDA/SCL.
+#define CAM_CS_PIN 10
+ArduCAM myCAM(OV2640, CAM_CS_PIN);
+
+// Toggle camera functionality at runtime
+// When false, skip camera initialisation and return 503 for `/image` requests
+bool cameraEnabled = true;
+
 // === DHT sensor ===
-// DHT11 sensor is attached to a digital pin. Change `DHTPIN` if needed.
+// Use DHT11 on a digital pin. Change `DHTPIN` if required
 #define DHTPIN 5
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
-// Display update timing (milliseconds).
+// Display update timing in milliseconds
 unsigned long lastDisplay = 0;
 const unsigned long displayInterval = 5000;
 
-// Latest sensor values (are updated when the DHT is read).
+// Store latest sensor values updated from the DHT
 float lastTemp = NAN;
 float lastHum = NAN;
-// Water level sensor on analogue pin A0.
+// Analogue pin A0 for water level
 #define WATER_PIN A0
-// lastLevel stores percentage 0-100; -1 indicates unknown.
+// Store water level as 0 to 100 per cent and use -1 for unknown
 int lastLevel = -1;
-// lastPumpOn stores the most recently applied pump state for the web UI.
+// Store recent pump state for the web UI
 bool lastPumpOn = false;
-// Relay (pump) control on digital pin D7. Relay is active HIGH.
+
+// Set a small per-chunk buffer for camera streaming
+const size_t CAM_CHUNK = 64;
+// Limit streamed bytes per capture to avoid long transfers and memory pressure (unuscessful)
+const uint32_t MAX_STREAM_BYTES = 2048; // 2 KB
+
+// Digital pin D7 for the relay. Relay is active high
 #define RELAY_PIN 7
 #define RELAY_ACTIVE_HIGH 1
 
-// === Time helpers (BST calculation) ===
-// Helper returns the number of days in a month and handles leap years.
-int daysInMonth(int year, int month) {
-    if (month == 2) {
-        // Checks for a leap year.
-        bool leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
-        return leap ? 29 : 28;
+// === Time helpers (epoch to date conversion without RTClib) ===
+// Converts epoch seconds to year, month, day, hour, minute, second.
+struct DateTimeStruct {
+    int year, month, day, hour, minute, second;
+};
+
+DateTimeStruct epochToDateTime(unsigned long epoch) {
+    DateTimeStruct dt;
+    dt.second = epoch % 60;
+    epoch /= 60;
+    dt.minute = epoch % 60;
+    epoch /= 60;
+    dt.hour = epoch % 24;
+    epoch /= 24;
+
+    // Days since 1970-01-01.
+    unsigned long days = epoch;
+    dt.year = 1970;
+
+    // Leap year helper.
+    auto isLeapYear = [](int y) { return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)); };
+
+    // Count forward to find year.
+    while (true) {
+        int daysInYear = isLeapYear(dt.year) ? 366 : 365;
+        if (days < daysInYear) break;
+        days -= daysInYear;
+        dt.year++;
     }
-    const int mdays[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
-    return mdays[month];
+
+    // Days in each month.
+    int daysInMonth[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (isLeapYear(dt.year)) daysInMonth[2] = 29;
+
+    // Count forward to find month.
+    dt.month = 1;
+    while (days >= daysInMonth[dt.month]) {
+        days -= daysInMonth[dt.month];
+        dt.month++;
+    }
+
+    dt.day = days + 1;
+    return dt;
 }
 
-// Determines whether a UTC epoch is within BST by computing the last Sunday of March
-// and the last Sunday of October for the epoch's year and compares the instant
-// against those transition instants (BST starts/ends at 01:00 UTC).
+// Determines whether a UTC epoch is within BST (simplified: Mar 25 - Oct 25).
 bool isBST(unsigned long utcEpoch) {
-    DateTime dt(utcEpoch);
-    int year = dt.year();
-
-    // Find last Sunday in March
-    int lastDayMar = daysInMonth(year, 3);
-    DateTime lastMar(year, 3, lastDayMar, 0, 0, 0);
-    int wd = (lastMar.unixtime() / 86400 + 4) % 7;
-    int lastSundayMar = lastDayMar - wd;
-    unsigned long bstStart = DateTime(year, 3, lastSundayMar, 1, 0, 0).unixtime();
-
-    // Find last Sunday in October
-    int lastDayOct = daysInMonth(year, 10);
-    DateTime lastOct(year, 10, lastDayOct, 0, 0, 0);
-    wd = (lastOct.unixtime() / 86400 + 4) % 7;
-    int lastSundayOct = lastDayOct - wd;
-    unsigned long bstEnd = DateTime(year, 10, lastSundayOct, 1, 0, 0).unixtime();
-
-    return (utcEpoch >= bstStart && utcEpoch < bstEnd);
+    DateTimeStruct dt = epochToDateTime(utcEpoch);
+    // BST runs roughly from last Sunday of March to last Sunday of October.
+    // For simplicity, using March 25 to October 25.
+    bool inRange = (dt.month > 3 || (dt.month == 3 && dt.day >= 25)) &&
+                   (dt.month < 10 || (dt.month == 10 && dt.day <= 25));
+    return inRange;
 }
 
 // Converts a UTC epoch to a local UK epoch by applying a +1 hour offset when BST applies.
@@ -117,6 +155,28 @@ void setup()
     lcd.setCursor(0, 0);
     lcd.print("Hello world");
 
+    // Initialise SPI and ArduCAM (only if camera is enabled).
+    if (cameraEnabled) {
+        pinMode(CAM_CS_PIN, OUTPUT);
+        digitalWrite(CAM_CS_PIN, HIGH);
+        SPI.begin();
+        delay(100);
+        // Test SPI bus to ArduCAM and initialise camera module.
+        myCAM.write_reg(ARDUCHIP_TEST1, 0x55);
+        if (myCAM.read_reg(ARDUCHIP_TEST1) != 0x55) {
+            Serial.println("ArduCAM SPI failure - camera may not be present");
+        } else {
+            Serial.println("ArduCAM detected");
+        }
+        myCAM.set_format(JPEG);
+        myCAM.InitCAM();
+        // Set a smaller JPEG resolution to reduce frame size (160x120).
+        // This is to avoid a huge ram buffer caused by the camera (unsuccessful).
+        myCAM.OV2640_set_JPEG_size(OV2640_160x120);
+    } else {
+        Serial.println("Camera functionality disabled (cameraEnabled=false)");
+    }
+
     // Initialise DHT sensor.
     dht.begin();
 
@@ -124,20 +184,6 @@ void setup()
     pinMode(RELAY_PIN, OUTPUT);
     // Ensure pump is off initially.
     if (RELAY_ACTIVE_HIGH) digitalWrite(RELAY_PIN, LOW); else digitalWrite(RELAY_PIN, HIGH);
-
-    // Initialise RTC.
-    Serial.println("Initialising RTC...");
-    if (!rtc.begin()) {
-        Serial.println("RTC not found - continuing without hardware RTC");
-        rtcPresent = false;
-    } else {
-        rtcPresent = true;
-        Serial.println("RTC initialised");
-        if (rtc.lostPower()) {
-            Serial.println("RTC lost power; consider setting it or allow NTP to initialise it");
-
-        }
-    }
 
     // Verify WiFi module presence.
     Serial.println("Checking for WiFi module...");
@@ -184,10 +230,6 @@ void setup()
         if (epoch != 0) {
             Serial.print("NTP time: ");
             Serial.println(epoch);
-            if (rtcPresent) {
-                rtc.adjust(DateTime(epoch));
-                Serial.println("RTC updated from NTP");
-            }
         } else {
             Serial.println("NTP sync failed");
         }
@@ -257,6 +299,7 @@ void loop()
         snprintf(lvlBuf, sizeof(lvlBuf), "Lvl:%3d%% P:%s", lastLevel >= 0 ? lastLevel : 0, pumpOn ? "On" : "Off");
         lcd.print(lvlBuf);
     }
+
     // Handle incoming HTTP clients.
     WiFiClient client = server.available();
     if (!client) {
@@ -282,6 +325,71 @@ void loop()
     Serial.println(request);
 
     // Simple request routing.
+    // Image endpoint: perform an on-demand capture and attempt to stream the JPEG
+    // directly to the client in small chunks to avoid large RAM buffer.
+    if (request.indexOf("GET /image") >= 0) {
+        if (!cameraEnabled) {
+            client.println("HTTP/1.1 503 Service Unavailable");
+            client.println("Content-Type: text/plain; charset=utf-8");
+            client.println("Connection: close");
+            client.println();
+            client.println("Camera disabled on device");
+        } else {
+            // Start capture.
+            myCAM.flush_fifo();
+            myCAM.clear_fifo_flag();
+            myCAM.start_capture();
+            unsigned long startCap = millis();
+            while (!myCAM.get_bit(ARDUCHIP_TRIG, CAP_DONE_MASK)) {
+                if (millis() - startCap > 2000) break;
+            }
+
+            uint32_t length = myCAM.read_fifo_length();
+            if (length == 0) {
+                // No image captured — return a 204-like empty response.
+                client.println("HTTP/1.1 204 No Content");
+                client.println("Connection: close");
+                client.println();
+            } else if (length > MAX_STREAM_BYTES) {
+                // Too large to safely stream on this device with current memory
+                // settings. Discard FIFO and notify client.
+                myCAM.clear_fifo_flag();
+                Serial.print("Captured JPEG too large: ");
+                Serial.print(length);
+                Serial.println(" bytes — rejecting to save RAM");
+                client.println("HTTP/1.1 413 Payload Too Large");
+                client.println("Content-Type: text/plain; charset=utf-8");
+                client.println("Connection: close");
+                client.println();
+                client.println("Image too large for device (increase limit or lower camera resolution)");
+            } else {
+                client.println("HTTP/1.1 200 OK");
+                client.println("Content-Type: image/jpeg");
+                client.print("Content-Length: ");
+                client.println(length);
+                client.println("Connection: close");
+                client.println();
+
+                // Stream FIFO directly to client in chunks.
+                myCAM.CS_LOW();
+                myCAM.set_fifo_burst();
+                uint8_t chunkBuf[CAM_CHUNK];
+                for (uint32_t sent = 0; sent < length; sent += CAM_CHUNK) {
+                    uint32_t chunk = (length - sent > CAM_CHUNK) ? CAM_CHUNK : (length - sent);
+                    for (uint32_t i = 0; i < chunk; i++) {
+                        chunkBuf[i] = SPI.transfer(0x00);
+                    }
+                    client.write(chunkBuf, chunk);
+                }
+                myCAM.CS_HIGH();
+                myCAM.clear_fifo_flag();
+                Serial.print("Streamed JPEG: ");
+                Serial.print(length);
+                Serial.println(" bytes");
+            }
+        }
+    }
+
     if (request.indexOf("GET /status") >= 0) {
         // Return JSON status object
         String ip = WiFi.localIP().toString();
@@ -318,19 +426,14 @@ void loop()
         timeClient.update();
         unsigned long nowEpoch = timeClient.getEpochTime();
 
-        // Fallback to RTC when NTP is unavailable.
-        if (nowEpoch == 0 && rtcPresent) {
-            nowEpoch = rtc.now().unixtime();
-        }
-
         // Compute UK-local epoch (apply BST when needed).
         unsigned long local = ukLocalEpoch(nowEpoch);
-        DateTime localDT(local);
 
         // Format datetime as DD/MM/YYYY HH:MM (24-hour).
+        DateTimeStruct localDT = epochToDateTime(local);
         char buf[32];
         snprintf(buf, sizeof(buf), "%02u/%02u/%04u %02u:%02u",
-                localDT.day(), localDT.month(), localDT.year(), localDT.hour(), localDT.minute());
+            localDT.day, localDT.month, localDT.year, localDT.hour, localDT.minute);
 
         client.println("HTTP/1.1 200 OK");
         client.println("Content-Type: application/json");
@@ -341,7 +444,7 @@ void loop()
         client.print("\"}");
     }
     else {
-        // Serve index page (dashboard HTML)
+        // Serve index page (dashboard HTML).
         client.println("HTTP/1.1 200 OK");
         client.println("Content-Type: text/html; charset=utf-8");
         client.println("Connection: close");
