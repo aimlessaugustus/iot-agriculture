@@ -43,8 +43,8 @@ ArduCAM myCAM(OV2640, CAM_CS_PIN);
 // Toggle camera functionality at runtime
 // When false, skip camera initialisation and return 503 for `/image` requests
 bool cameraEnabled = false;
-// Track whether a camera responds on the SPI bus (ie showing it is physically present)
-bool cameraPresent = false;
+// Record whether a camera was detected during initialisation
+bool cameraDetectedAtInit = false;
 
 // === DHT sensor ===
 // Use DHT11 on a digital pin. Change `DHTPIN` if required
@@ -166,22 +166,22 @@ void setup()
     myCAM.write_reg(ARDUCHIP_TEST1, 0x55);
     if (myCAM.read_reg(ARDUCHIP_TEST1) != 0x55) {
         Serial.println("ArduCAM SPI failure - camera may not be present");
-        cameraPresent = false;
+        cameraDetectedAtInit = false;
     } else {
         Serial.println("ArduCAM detected");
-        cameraPresent = true;
+        cameraDetectedAtInit = true;
     }
 
     // Perform full camera initialisation only when the camera is enabled
     // and a module responded to the SPI test
-    if (cameraEnabled && cameraPresent) {
+    if (cameraEnabled && cameraDetectedAtInit) {
         myCAM.set_format(JPEG);
         myCAM.InitCAM();
         // Set a smaller JPEG resolution to reduce frame size (160x120)
         myCAM.OV2640_set_JPEG_size(OV2640_160x120);
     } else if (!cameraEnabled) {
         Serial.println("Camera functionality disabled (cameraEnabled=false)");
-    } else if (!cameraPresent) {
+    } else if (!cameraDetectedAtInit) {
         Serial.println("Camera not present, skipping initialisation");
     }
 
@@ -411,7 +411,10 @@ void loop()
         client.print(connected ? "true" : "false");
         client.print(",\"ip\":\"");
         if (connected) client.print(ip);
-        client.print("\"}");
+        client.print("\",");
+        client.print("\"cameraDetected\":");
+        client.print(cameraDetectedAtInit ? "true" : "false");
+        client.print("}");
     }
     // Sensor endpoint returns latest DHT readings.
     else if (request.indexOf("GET /sensor") >= 0) {

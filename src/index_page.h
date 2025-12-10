@@ -24,7 +24,7 @@ const char* INDEX_PAGE = R"rawliteral(
                         <p class="card-text"><strong>Humidity:</strong> <span id="hum">Loading…</span></p>
                         <p class="card-text"><strong>Water level:</strong> <span id="level">Loading…</span></p>
                         <p class="card-text"><strong>Pump:</strong> <span id="pump">Loading…</span></p>
-                        <p class="card-text"><strong>Camera:</strong></p>
+                        <p class="card-text"><strong>Camera detection:</strong> <span id="camera">Loading…</span></p>
                         <div class="ratio ratio-16x9 mb-2">
                             <img id="cam" src="/image?t=0" alt="Camera" style="width:100%;height:100%;object-fit:cover;" />
                         </div>
@@ -41,6 +41,12 @@ async function fetchStatus(){
         const r = await fetch('/status');
         const j = await r.json();
         document.getElementById('wifi').textContent = j.connected ? ('Connected: ' + j.ip) : 'Not connected';
+        // Prefer cameraDetected (set at initialisation). Fall back to camera for older builds.
+        if (typeof j.cameraDetected !== 'undefined') {
+            document.getElementById('camera').textContent = j.cameraDetected ? 'Successful' : 'Unsuccessful';
+        } else if (typeof j.camera !== 'undefined') {
+            document.getElementById('camera').textContent = j.camera ? 'Successful' : 'Unsuccessful';
+        }
     }catch(e){
         document.getElementById('wifi').textContent = 'Error';
     }
