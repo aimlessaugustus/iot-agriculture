@@ -228,7 +228,7 @@ void loop()
         // Second line: show water level percentage
         lcd.setCursor(0, 1);
         char lvlBuf[17];
-        snprintf(lvlBuf, sizeof(lvlBuf), "Level: %3d%%%%", lastLevel);
+        snprintf(lvlBuf, sizeof(lvlBuf), "Level: %3d%%", lastLevel);
         lcd.print(lvlBuf);
     }
     // Handle incoming HTTP clients
