@@ -48,6 +48,8 @@ float lastHum = NAN;
 #define WATER_PIN A0
 // lastLevel stores percentage 0-100; -1 indicates unknown.
 int lastLevel = -1;
+// lastPumpOn stores the most recently applied pump state for the web UI.
+bool lastPumpOn = false;
 // Relay (pump) control on digital pin D7. Relay is active HIGH.
 #define RELAY_PIN 7
 #define RELAY_ACTIVE_HIGH 1
@@ -239,6 +241,8 @@ void loop()
         if (lastLevel >= 0) {
             pumpOn = (lastLevel < SECRET_TARGET_LEVEL);
         }
+        // Publish the last pump state so the web endpoint can report it.
+        lastPumpOn = pumpOn;
 
         // Drive relay according to pump state (respect RELAY_ACTIVE_HIGH).
         if (pumpOn) {
@@ -305,6 +309,8 @@ void loop()
         if (!isnan(lastHum)) client.print(lastHum, 0); else client.print("null");
         client.print(",\"level\":");
         if (lastLevel >= 0) client.print(lastLevel); else client.print("null");
+        client.print(",\"pump\":");
+        if (lastLevel >= 0) client.print(lastPumpOn ? "true" : "false"); else client.print("null");
         client.print("}");
     }
     else if (request.indexOf("GET /time") >= 0) {

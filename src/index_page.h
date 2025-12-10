@@ -23,6 +23,7 @@ const char* INDEX_PAGE = R"rawliteral(
                         <p class="card-text"><strong>Temperature:</strong> <span id="temp">Loading…</span></p>
                         <p class="card-text"><strong>Humidity:</strong> <span id="hum">Loading…</span></p>
                         <p class="card-text"><strong>Water level:</strong> <span id="level">Loading…</span></p>
+                        <p class="card-text"><strong>Pump:</strong> <span id="pump">Loading…</span></p>
                         <a href="#" class="btn btn-primary" onclick="location.reload()">Refresh</a>
                     </div>
                 </div>
@@ -62,9 +63,11 @@ async function fetchSensor(){
         document.getElementById('temp').textContent = j.temperature !== null ? (j.temperature + ' °C') : 'N/A';
         document.getElementById('hum').textContent = j.humidity !== null ? (j.humidity + ' %') : 'N/A';
         document.getElementById('level').textContent = j.level !== null ? (j.level + ' %') : 'N/A';
+        document.getElementById('pump').textContent = j.pump !== null ? (j.pump ? 'On' : 'Off') : 'N/A';
     }catch(e){
         document.getElementById('temp').textContent = 'Error';
         document.getElementById('hum').textContent = 'Error';
+        document.getElementById('pump').textContent = 'Error';
     }
 }
 fetchSensor();
