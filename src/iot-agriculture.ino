@@ -42,7 +42,9 @@ ArduCAM myCAM(OV2640, CAM_CS_PIN);
 
 // Toggle camera functionality at runtime
 // When false, skip camera initialisation and return 503 for `/image` requests
-bool cameraEnabled = true;
+bool cameraEnabled = false;
+// Track whether a camera responds on the SPI bus (ie showing it is physically present)
+bool cameraPresent = false;
 
 // === DHT sensor ===
 // Use DHT11 on a digital pin. Change `DHTPIN` if required
@@ -66,7 +68,7 @@ bool lastPumpOn = false;
 
 // Set a small per-chunk buffer for camera streaming
 const size_t CAM_CHUNK = 64;
-// Limit streamed bytes per capture to avoid long transfers and memory pressure (unuscessful)
+// Limit streamed bytes per capture to avoid long transfers and memory pressure (unsuccessful)
 const uint32_t MAX_STREAM_BYTES = 2048; // 2 KB
 
 // Digital pin D7 for the relay. Relay is active high
@@ -155,26 +157,32 @@ void setup()
     lcd.setCursor(0, 0);
     lcd.print("Hello world");
 
-    // Initialise SPI and ArduCAM (only if camera is enabled).
-    if (cameraEnabled) {
-        pinMode(CAM_CS_PIN, OUTPUT);
-        digitalWrite(CAM_CS_PIN, HIGH);
-        SPI.begin();
-        delay(100);
-        // Test SPI bus to ArduCAM and initialise camera module.
-        myCAM.write_reg(ARDUCHIP_TEST1, 0x55);
-        if (myCAM.read_reg(ARDUCHIP_TEST1) != 0x55) {
-            Serial.println("ArduCAM SPI failure - camera may not be present");
-        } else {
-            Serial.println("ArduCAM detected");
-        }
+    // Initialise SPI and test the ArduCAM SPI bus so the device can report
+    // whether a camera is present even when image capture is disabled
+    pinMode(CAM_CS_PIN, OUTPUT);
+    digitalWrite(CAM_CS_PIN, HIGH);
+    SPI.begin();
+    delay(100);
+    myCAM.write_reg(ARDUCHIP_TEST1, 0x55);
+    if (myCAM.read_reg(ARDUCHIP_TEST1) != 0x55) {
+        Serial.println("ArduCAM SPI failure - camera may not be present");
+        cameraPresent = false;
+    } else {
+        Serial.println("ArduCAM detected");
+        cameraPresent = true;
+    }
+
+    // Perform full camera initialisation only when the camera is enabled
+    // and a module responded to the SPI test
+    if (cameraEnabled && cameraPresent) {
         myCAM.set_format(JPEG);
         myCAM.InitCAM();
-        // Set a smaller JPEG resolution to reduce frame size (160x120).
-        // This is to avoid a huge ram buffer caused by the camera (unsuccessful).
+        // Set a smaller JPEG resolution to reduce frame size (160x120)
         myCAM.OV2640_set_JPEG_size(OV2640_160x120);
-    } else {
+    } else if (!cameraEnabled) {
         Serial.println("Camera functionality disabled (cameraEnabled=false)");
+    } else if (!cameraPresent) {
+        Serial.println("Camera not present, skipping initialisation");
     }
 
     // Initialise DHT sensor.
