@@ -1,4 +1,3 @@
-// Provide mobile-friendly Bootstrap landing page
 const char* INDEX_PAGE = R"rawliteral(
 <!doctype html>
 <html lang="en">
@@ -7,41 +6,59 @@ const char* INDEX_PAGE = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <title>IoT Agriculture</title>
+    
 </head>
 <body class="bg-light">
 <div class="container py-4">
-    <div class="text-center">
-        <h1 class="display-6">IoT Agriculture Device</h1>
-        <p class="lead">Arduino R4 WiFi</p>
-        <div class="row gy-3">
-            <div class="col-12 col-md-6 offset-md-3">
-                <div class="card">
-                    <div class="card-body text-center">
-                        <h5 class="card-title">Device Status</h5>
-                        <p class="card-text"><strong>Wi-Fi:</strong> <span id="wifi">Loading…</span></p>
-                        <p class="card-text"><strong>Time:</strong> <span id="datetime">Loading…</span></p>
-                        <p class="card-text"><strong>Temperature:</strong> <span id="temp">Loading…</span></p>
-                        <p class="card-text"><strong>Humidity:</strong> <span id="hum">Loading…</span></p>
-                        <p class="card-text"><strong>Water level:</strong> <span id="level">Loading…</span></p>
-                        <p class="card-text"><strong>Pump:</strong> <span id="pump">Loading…</span></p>
-                        <p class="card-text"><strong>Camera Detection:</strong> <span id="camera">Loading…</span></p>
-                        <div class="ratio ratio-16x9 mb-2">
-                            <img id="cam" src="/image?t=0" alt="Camera" style="width:100%;height:100%;object-fit:cover;" />
-                        </div>
-                        <a href="#" class="btn btn-primary" onclick="location.reload()">Refresh</a>
-                    </div>
-                </div>
+    <div class="card shadow-sm rounded mx-auto overflow-hidden" style="max-width:520px;">
+        <div class="d-flex p-3 gap-3 align-items-center bg-light border-bottom">
+            <div class="flex-shrink-0 bg-secondary overflow-hidden rounded" style="width:160px;height:120px;">
+                <img id="cam" src="" alt="Camera (disabled)" style="width:100%;height:100%;object-fit:cover;display:block;" />
+                <!--
+                image src below used for Arducam Preview
+                <img id="cam" src="/image?t=0" alt="Camera" style="width:100%;height:100%;object-fit:cover;display:block;" />
+                -->
+            </div>
+            <div class="flex-grow-1">
+                <h5 class="mb-1">Smart Agriculture System</h5>
+                <div class="text-muted small" id="wifi">Loading…</div>
+                <div class="text-muted small" id="datetime">Loading…</div>
             </div>
         </div>
+        <ul class="list-group list-group-flush">
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span class="text-muted small">Temperature</span>
+                <span id="temp" class="fw-semibold">Loading…</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span class="text-muted small">Humidity</span>
+                <span id="hum" class="fw-semibold">Loading…</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span class="text-muted small">Water level</span>
+                <span id="level" class="fw-semibold">Loading…</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span class="text-muted small">Pump</span>
+                <span id="pump" class="fw-semibold">Loading…</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span class="text-muted small">Camera detection</span>
+                <span id="camera" class="fw-semibold">Loading…</span>
+            </li>
+        </ul>
     </div>
+
+    
 </div>
+
 <script>
+// Fetch and display status/time/sensor values
 async function fetchStatus(){
     try{
         const r = await fetch('/status');
         const j = await r.json();
         document.getElementById('wifi').textContent = j.connected ? ('Connected: ' + j.ip) : 'Not connected';
-        // Prefer cameraDetected (set at initialisation). Fall back to camera for older builds.
         if (typeof j.cameraDetected !== 'undefined') {
             document.getElementById('camera').textContent = j.cameraDetected ? 'Successful' : 'Unsuccessful';
         } else if (typeof j.camera !== 'undefined') {
@@ -52,7 +69,7 @@ async function fetchStatus(){
     }
 }
 fetchStatus();
-// Fetch time and update every 60 seconds
+
 async function fetchTime(){
     try{
         const r = await fetch('/time');
@@ -65,7 +82,6 @@ async function fetchTime(){
 fetchTime();
 setInterval(fetchTime, 60000);
 
-// Fetch sensor data and update every 5 seconds
 async function fetchSensor(){
     try{
         const r = await fetch('/sensor');
@@ -79,22 +95,23 @@ async function fetchSensor(){
         document.getElementById('hum').textContent = 'Error';
         document.getElementById('pump').textContent = 'Error';
     }
-}
-fetchSensor();
-setInterval(fetchSensor, 5000);
-
-// Fetch camera image less frequently to reduce load and add timestamp to bypass cache
-async function fetchImage(){
-    try{
-        const timestamp = Date.now();
-        document.getElementById('cam').src = '/image?t=' + timestamp;
-    }catch(e){
-        // Ignore image fetch errors
     }
-}
-fetchImage();
-// Update image every 15 seconds to reduce device and network load
-setInterval(fetchImage, 15000);
+    fetchSensor();
+    setInterval(fetchSensor, 5000);
+
+    /*
+    Arducam image fetch (disabled to stop buffers)
+    async function fetchImage(){
+        try{
+            const timestamp = Date.now();
+            document.getElementById('cam').src = '/image?t=' + timestamp;
+        }catch(e){
+            // ignore image fetch errors
+        }
+    }
+    fetchImage();
+    setInterval(fetchImage, 15000);
+    */
 </script>
 </body>
 </html>
