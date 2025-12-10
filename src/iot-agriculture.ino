@@ -28,7 +28,7 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "uk.pool.ntp.org", 0, 60000);
 
 // === Local display (I2C) ===
-// An I2C LCD module is supported (common address 0x27). SDA=A4, SCL=A5 on Uno/R4.
+// An I2C LCD module is supported (common address 0x27). SDA is A4 and SCL is A5 on Uno/R4.
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // === DHT sensor ===
@@ -37,22 +37,26 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
-// Display update timing
+// Display update timing (milliseconds).
 unsigned long lastDisplay = 0;
-const unsigned long displayInterval = 5000; // 5 seconds
+const unsigned long displayInterval = 5000;
 
-// Latest sensor values (updated when DHT is read)
+// Latest sensor values (are updated when the DHT is read).
 float lastTemp = NAN;
 float lastHum = NAN;
-// Water level sensor (analog A0)
+// Water level sensor on analogue pin A0.
 #define WATER_PIN A0
-int lastLevel = -1; // percentage 0-100, -1 = unknown
+// lastLevel stores percentage 0-100; -1 indicates unknown.
+int lastLevel = -1;
+// Relay (pump) control on digital pin D7. Relay is active HIGH.
+#define RELAY_PIN 7
+#define RELAY_ACTIVE_HIGH 1
 
 // === Time helpers (BST calculation) ===
-// Helper returns the number of days in a month (handles leap years).
+// Helper returns the number of days in a month and handles leap years.
 int daysInMonth(int year, int month) {
     if (month == 2) {
-        // Check leap year
+        // Checks for a leap year.
         bool leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
         return leap ? 29 : 28;
     }
@@ -93,7 +97,7 @@ unsigned long ukLocalEpoch(unsigned long utcEpoch) {
 void setup()
 {
     Serial.begin(9600);
-    // Wait for serial port to connect (3 second timeout)
+    // Wait for serial port to connect (3 second timeout).
     while (!Serial && millis() < 3000)
     {
         ;
@@ -103,7 +107,7 @@ void setup()
     Serial.println("Serial communication initialised");
     delay(1000);
 
-    // Initialise I2C and LCD for hardware test
+    // Initialise I2C and LCD for hardware test.
     Wire.begin();
     lcd.init();
     lcd.backlight();
@@ -111,10 +115,15 @@ void setup()
     lcd.setCursor(0, 0);
     lcd.print("Hello world");
 
-    // Initialise DHT sensor
+    // Initialise DHT sensor.
     dht.begin();
 
-    // Initialise RTC
+    // Initialise relay pin for pump control.
+    pinMode(RELAY_PIN, OUTPUT);
+    // Ensure pump is off initially.
+    if (RELAY_ACTIVE_HIGH) digitalWrite(RELAY_PIN, LOW); else digitalWrite(RELAY_PIN, HIGH);
+
+    // Initialise RTC.
     Serial.println("Initialising RTC...");
     if (!rtc.begin()) {
         Serial.println("RTC not found - continuing without hardware RTC");
@@ -128,7 +137,7 @@ void setup()
         }
     }
 
-    // Verify WiFi module presence
+    // Verify WiFi module presence.
     Serial.println("Checking for WiFi module...");
     if (WiFi.status() == WL_NO_MODULE)
     {
@@ -138,7 +147,7 @@ void setup()
     }
     Serial.println("WiFi module detected successfully");
 
-    // Connect to WiFi (10 second timeout)
+    // Connect to WiFi (10 second timeout).
     Serial.print("Connecting to WiFi network: ");
     Serial.println(ssid);
 
@@ -161,12 +170,12 @@ void setup()
         Serial.print("Signal strength (RSSI): ");
         Serial.print(WiFi.RSSI());
         Serial.println(" dBm");
-        // Start HTTP server
+        // Start HTTP server.
         server.begin();
         Serial.print("HTTP server started. Open http://");
         Serial.print(WiFi.localIP());
         Serial.println(" on your phone or computer.");
-        // Start NTP client and attempt initial sync
+        // Start NTP client and attempt initial sync.
         timeClient.begin();
         timeClient.update();
         unsigned long epoch = timeClient.getEpochTime();
@@ -193,7 +202,7 @@ void setup()
 
 void loop()
 {
-    // Update LCD with sensor data at a controlled interval
+    // Update LCD with sensor data at a controlled interval.
     unsigned long now = millis();
     if (now - lastDisplay >= displayInterval) {
         lastDisplay = now;
@@ -201,11 +210,11 @@ void loop()
         float h = dht.readHumidity();
         float t = dht.readTemperature(); // Celsius
 
-        // Update stored sensor values so the web endpoint can report them
+        // Update stored sensor values so the web endpoint can report them.
         lastTemp = t;
         lastHum = h;
 
-        // Read water level on analog pin and convert to percentage
+        // Read water level on analog pin and convert to percentage.
         int raw = analogRead(WATER_PIN);
         int level = map(raw, 0, 1023, 0, 100);
         if (level < 0) level = 0; if (level > 100) level = 100;
@@ -225,13 +234,26 @@ void loop()
             lcd.print("%");
         }
 
-        // Second line: show water level percentage
+        // Determine pump state by comparing level to target.
+        bool pumpOn = false;
+        if (lastLevel >= 0) {
+            pumpOn = (lastLevel < SECRET_TARGET_LEVEL);
+        }
+
+        // Drive relay according to pump state (respect RELAY_ACTIVE_HIGH).
+        if (pumpOn) {
+            if (RELAY_ACTIVE_HIGH) digitalWrite(RELAY_PIN, HIGH); else digitalWrite(RELAY_PIN, LOW);
+        } else {
+            if (RELAY_ACTIVE_HIGH) digitalWrite(RELAY_PIN, LOW); else digitalWrite(RELAY_PIN, HIGH);
+        }
+
+        // Second line: show water level percentage and pump state (short form).
         lcd.setCursor(0, 1);
         char lvlBuf[17];
-        snprintf(lvlBuf, sizeof(lvlBuf), "Level: %3d%%", lastLevel);
+        snprintf(lvlBuf, sizeof(lvlBuf), "Lvl:%3d%% P:%s", lastLevel >= 0 ? lastLevel : 0, pumpOn ? "On" : "Off");
         lcd.print(lvlBuf);
     }
-    // Handle incoming HTTP clients
+    // Handle incoming HTTP clients.
     WiFiClient client = server.available();
     if (!client) {
         delay(10);
@@ -240,7 +262,7 @@ void loop()
 
     Serial.println("New HTTP client");
 
-    // Read request (2 second timeout)
+    // Read request (2 second timeout).
     String request = "";
     unsigned long start = millis();
     while (client.connected() && (millis() - start) < 2000) {
@@ -255,7 +277,7 @@ void loop()
     Serial.println("Request:");
     Serial.println(request);
 
-    // Simple request routing
+    // Simple request routing.
     if (request.indexOf("GET /status") >= 0) {
         // Return JSON status object
         String ip = WiFi.localIP().toString();
@@ -271,7 +293,7 @@ void loop()
         if (connected) client.print(ip);
         client.print("\"}");
     }
-    // Sensor endpoint returns latest DHT readings
+    // Sensor endpoint returns latest DHT readings.
     else if (request.indexOf("GET /sensor") >= 0) {
         client.println("HTTP/1.1 200 OK");
         client.println("Content-Type: application/json");
@@ -286,23 +308,23 @@ void loop()
         client.print("}");
     }
     else if (request.indexOf("GET /time") >= 0) {
-        // Update NTP client and get UTC epoch
+        // Update NTP client and get UTC epoch.
         timeClient.update();
         unsigned long nowEpoch = timeClient.getEpochTime();
 
-        // Fallback to RTC when NTP is unavailable
+        // Fallback to RTC when NTP is unavailable.
         if (nowEpoch == 0 && rtcPresent) {
             nowEpoch = rtc.now().unixtime();
         }
 
-        // Compute UK-local epoch (apply BST when needed)
+        // Compute UK-local epoch (apply BST when needed).
         unsigned long local = ukLocalEpoch(nowEpoch);
         DateTime localDT(local);
 
-        // Format datetime as DD/MM/YYYY HH:MM (24-hour)
+        // Format datetime as DD/MM/YYYY HH:MM (24-hour).
         char buf[32];
         snprintf(buf, sizeof(buf), "%02u/%02u/%04u %02u:%02u",
-                 localDT.day(), localDT.month(), localDT.year(), localDT.hour(), localDT.minute());
+                localDT.day(), localDT.month(), localDT.year(), localDT.hour(), localDT.minute());
 
         client.println("HTTP/1.1 200 OK");
         client.println("Content-Type: application/json");
