@@ -24,7 +24,7 @@ const char* INDEX_PAGE = R"rawliteral(
                         <p class="card-text"><strong>Humidity:</strong> <span id="hum">Loading…</span></p>
                         <p class="card-text"><strong>Water level:</strong> <span id="level">Loading…</span></p>
                         <p class="card-text"><strong>Pump:</strong> <span id="pump">Loading…</span></p>
-                        <p class="card-text"><strong>Camera detection:</strong> <span id="camera">Loading…</span></p>
+                        <p class="card-text"><strong>Camera Detection:</strong> <span id="camera">Loading…</span></p>
                         <div class="ratio ratio-16x9 mb-2">
                             <img id="cam" src="/image?t=0" alt="Camera" style="width:100%;height:100%;object-fit:cover;" />
                         </div>
