@@ -44,6 +44,9 @@ const unsigned long displayInterval = 5000; // 5 seconds
 // Latest sensor values (updated when DHT is read)
 float lastTemp = NAN;
 float lastHum = NAN;
+// Water level sensor (analog A0)
+#define WATER_PIN A0
+int lastLevel = -1; // percentage 0-100, -1 = unknown
 
 // === Time helpers (BST calculation) ===
 // Helper returns the number of days in a month (handles leap years).
@@ -202,12 +205,16 @@ void loop()
         lastTemp = t;
         lastHum = h;
 
+        // Read water level on analog pin and convert to percentage
+        int raw = analogRead(WATER_PIN);
+        int level = map(raw, 0, 1023, 0, 100);
+        if (level < 0) level = 0; if (level > 100) level = 100;
+        lastLevel = level;
+
         lcd.clear();
         if (isnan(h) || isnan(t)) {
             lcd.setCursor(0, 0);
             lcd.print("DHT error");
-            lcd.setCursor(0, 1);
-            lcd.print("Check sensor");
         } else {
             lcd.setCursor(0, 0);
             lcd.print("T:");
@@ -217,6 +224,12 @@ void loop()
             lcd.print(h, 0);
             lcd.print("%");
         }
+
+        // Second line: show water level percentage
+        lcd.setCursor(0, 1);
+        char lvlBuf[17];
+        snprintf(lvlBuf, sizeof(lvlBuf), "Level: %3d%%%%", lastLevel);
+        lcd.print(lvlBuf);
     }
     // Handle incoming HTTP clients
     WiFiClient client = server.available();
