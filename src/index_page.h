@@ -22,6 +22,7 @@ const char* INDEX_PAGE = R"rawliteral(
                         <p class="card-text"><strong>Time:</strong> <span id="datetime">Loading…</span></p>
                         <p class="card-text"><strong>Temperature:</strong> <span id="temp">Loading…</span></p>
                         <p class="card-text"><strong>Humidity:</strong> <span id="hum">Loading…</span></p>
+                        <p class="card-text"><strong>Water level:</strong> <span id="level">Loading…</span></p>
                         <a href="#" class="btn btn-primary" onclick="location.reload()">Refresh</a>
                     </div>
                 </div>
@@ -60,6 +61,7 @@ async function fetchSensor(){
         const j = await r.json();
         document.getElementById('temp').textContent = j.temperature !== null ? (j.temperature + ' °C') : 'N/A';
         document.getElementById('hum').textContent = j.humidity !== null ? (j.humidity + ' %') : 'N/A';
+        document.getElementById('level').textContent = j.level !== null ? (j.level + ' %') : 'N/A';
     }catch(e){
         document.getElementById('temp').textContent = 'Error';
         document.getElementById('hum').textContent = 'Error';

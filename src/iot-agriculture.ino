@@ -281,6 +281,8 @@ void loop()
         if (!isnan(lastTemp)) client.print(lastTemp, 1); else client.print("null");
         client.print(",\"humidity\":");
         if (!isnan(lastHum)) client.print(lastHum, 0); else client.print("null");
+        client.print(",\"level\":");
+        if (lastLevel >= 0) client.print(lastLevel); else client.print("null");
         client.print("}");
     }
     else if (request.indexOf("GET /time") >= 0) {
