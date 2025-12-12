@@ -225,8 +225,7 @@ void handleImage(WiFiClient& client, const String& method, const String& request
     }
 
     uint32_t len = myCAM.read_fifo_length();
-    // (No debug prints here) If needed enable Serial logs elsewhere.
-    if (len == 0) {
+        if (len == 0) {
         myCAM.clear_fifo_flag();
         client.println("HTTP/1.1 204 No Content");
         client.println("Connection: close");
@@ -275,8 +274,6 @@ void handleImage(WiFiClient& client, const String& method, const String& request
     myCAM.CS_HIGH();
     myCAM.clear_fifo_flag();
 }
-
-// Debug endpoint removed
 
 void setup()
 {
