@@ -18,8 +18,9 @@ char ssid[] = SECRET_SSID;
 char password[] = SECRET_PASS;
 
 // === HTTP server ===
-// Serve a simple dashboard and status endpoints on HTTP port 80
-WiFiServer server(80);
+// Use the Uno R4 webserver library for routes and authentication
+#include <UnoR4WiFi_WebServer.h>
+UnoR4WiFi_WebServer server;
 // Provide dashboard HTML via `index_page.h`
 #include "index_page.h"
 
@@ -68,7 +69,7 @@ bool lastPumpOn = false;
 
 // Set a small per-chunk buffer for camera streaming
 const size_t CAM_CHUNK = 64;
-// Limit streamed bytes per capture to avoid long transfers and memory pressure (unsuccessful)
+// Limit streamed bytes per capture to avoid long transfers and memory pressure
 const uint32_t MAX_STREAM_BYTES = 2048; // 2 KB
 
 // Digital pin D7 for the relay. Relay is active high
@@ -136,6 +137,127 @@ unsigned long ukLocalEpoch(unsigned long utcEpoch) {
     return utcEpoch;
 }
 
+// --- Route handlers for UnoR4WiFi_WebServer ------------------------------
+// Handler signature: (WiFiClient& client, const String& method, const String& request,
+//                     const QueryParams& params, const String& jsonData)
+
+void handleRoot(WiFiClient& client, const String& method, const String& request, const QueryParams& params, const String& jsonData) {
+    // INDEX_PAGE is a raw HTML string defined in `index_page.h`
+    server.sendResponse(client, INDEX_PAGE);
+}
+
+void handleStatus(WiFiClient& client, const String& method, const String& request, const QueryParams& params, const String& jsonData) {
+    String ip = WiFi.localIP().toString();
+    bool connected = (WiFi.status() == WL_CONNECTED);
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.println();
+    client.print("{\"connected\":");
+    client.print(connected ? "true" : "false");
+    client.print(",\"ip\":\"");
+    if (connected) client.print(ip);
+    client.print("\",\"cameraDetected\":");
+    client.print(cameraDetectedAtInit ? "true" : "false");
+    client.print("}");
+}
+
+void handleSensor(WiFiClient& client, const String& method, const String& request, const QueryParams& params, const String& jsonData) {
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.println();
+    client.print("{\"temperature\":");
+    if (!isnan(lastTemp)) client.print(lastTemp, 1); else client.print("null");
+    client.print(",\"humidity\":");
+    if (!isnan(lastHum)) client.print(lastHum, 0); else client.print("null");
+    client.print(",\"level\":");
+    if (lastLevel >= 0) client.print(lastLevel); else client.print("null");
+    client.print(",\"pump\":");
+    if (lastLevel >= 0) client.print(lastPumpOn ? "true" : "false"); else client.print("null");
+    client.print("}");
+}
+
+void handleTime(WiFiClient& client, const String& method, const String& request, const QueryParams& params, const String& jsonData) {
+    timeClient.update();
+    unsigned long nowEpoch = timeClient.getEpochTime();
+    unsigned long local = ukLocalEpoch(nowEpoch);
+    DateTimeStruct localDT = epochToDateTime(local);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%02u/%02u/%04u %02u:%02u",
+        localDT.day, localDT.month, localDT.year, localDT.hour, localDT.minute);
+
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.println();
+    client.print("{\"datetime\":\"");
+    client.print(buf);
+    client.print("\"}");
+}
+
+void handleImage(WiFiClient& client, const String& method, const String& request, const QueryParams& params, const String& jsonData) {
+    if (!cameraEnabled) {
+        client.println("HTTP/1.1 503 Service Unavailable");
+        client.println("Content-Type: text/plain; charset=utf-8");
+        client.println("Connection: close");
+        client.println();
+        client.println("Camera disabled on device");
+        return;
+    }
+
+    // Start capture.
+    myCAM.flush_fifo();
+    myCAM.clear_fifo_flag();
+    myCAM.start_capture();
+    unsigned long startCap = millis();
+    while (!myCAM.get_bit(ARDUCHIP_TRIG, CAP_DONE_MASK)) {
+        if (millis() - startCap > 2000) break;
+    }
+
+    uint32_t length = myCAM.read_fifo_length();
+    if (length == 0) {
+        client.println("HTTP/1.1 204 No Content");
+        client.println("Connection: close");
+        client.println();
+        return;
+    } else if (length > MAX_STREAM_BYTES) {
+        myCAM.clear_fifo_flag();
+        Serial.print("Captured JPEG too large: ");
+        Serial.print(length);
+        Serial.println(" bytes — rejecting to save RAM");
+        client.println("HTTP/1.1 413 Payload Too Large");
+        client.println("Content-Type: text/plain; charset=utf-8");
+        client.println("Connection: close");
+        client.println();
+        client.println("Image too large for device (increase limit or lower camera resolution)");
+        return;
+    } else {
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: image/jpeg");
+        client.print("Content-Length: ");
+        client.println(length);
+        client.println("Connection: close");
+        client.println();
+
+        myCAM.CS_LOW();
+        myCAM.set_fifo_burst();
+        uint8_t chunkBuf[CAM_CHUNK];
+        for (uint32_t sent = 0; sent < length; sent += CAM_CHUNK) {
+            uint32_t chunk = (length - sent > CAM_CHUNK) ? CAM_CHUNK : (length - sent);
+            for (uint32_t i = 0; i < chunk; i++) {
+                chunkBuf[i] = SPI.transfer(0x00);
+            }
+            client.write(chunkBuf, chunk);
+        }
+        myCAM.CS_HIGH();
+        myCAM.clear_fifo_flag();
+        Serial.print("Streamed JPEG: ");
+        Serial.print(length);
+        Serial.println(" bytes");
+    }
+}
+
 void setup()
 {
     Serial.begin(9600);
@@ -193,62 +315,32 @@ void setup()
     // Ensure pump is off initially.
     if (RELAY_ACTIVE_HIGH) digitalWrite(RELAY_PIN, LOW); else digitalWrite(RELAY_PIN, HIGH);
 
-    // Verify WiFi module presence.
-    Serial.println("Checking for WiFi module...");
-    if (WiFi.status() == WL_NO_MODULE)
-    {
-        Serial.println("ERROR: Communication with WiFi module failed!");
-        while (true)
-            ;
-    }
-    Serial.println("WiFi module detected successfully");
+    // Configure routes and start the UnoR4WiFi_WebServer which will handle
+    // the WiFi connection and incoming HTTP clients for us.
+    server.addRoute("/", handleRoot);
+    server.addRoute("/status", handleStatus);
+    server.addRoute("/sensor", handleSensor);
+    server.addRoute("/time", handleTime);
+    server.addRoute("/image", handleImage);
 
-    // Connect to WiFi (10 second timeout).
-    Serial.print("Connecting to WiFi network: ");
-    Serial.println(ssid);
+    // Enable simple Basic Auth — credentials must be provided in `arduino_secrets.h`
+    server.enableAuthentication(SECRET_BASIC_USER, SECRET_BASIC_PASS, "Smart Agriculture");
 
-    int status = WL_IDLE_STATUS;
-    unsigned long startAttemptTime = millis();
-    const unsigned long timeout = 10000;
+    // Start the server and let it manage the WiFi connection.
+    server.begin(ssid, password);
+    Serial.print("HTTP server started. Open http://");
+    Serial.print(WiFi.localIP());
+    Serial.println(" on your phone or computer.");
 
-    while (status != WL_CONNECTED && millis() - startAttemptTime < timeout)
-    {
-        status = WiFi.begin(ssid, password);
-        delay(500);
-        Serial.print(".");
-    }
-
-    if (status == WL_CONNECTED)
-    {
-        Serial.println("\nConnected to WiFi");
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
-        Serial.print("Signal strength (RSSI): ");
-        Serial.print(WiFi.RSSI());
-        Serial.println(" dBm");
-        // Start HTTP server.
-        server.begin();
-        Serial.print("HTTP server started. Open http://");
-        Serial.print(WiFi.localIP());
-        Serial.println(" on your phone or computer.");
-        // Start NTP client and attempt initial sync.
-        timeClient.begin();
-        timeClient.update();
-        unsigned long epoch = timeClient.getEpochTime();
-        if (epoch != 0) {
-            Serial.print("NTP time: ");
-            Serial.println(epoch);
-        } else {
-            Serial.println("NTP sync failed");
-        }
-    }
-    else
-    {
-        Serial.println("\nFailed to connect to WiFi");
-        Serial.println("Connection timeout - please check:");
-        Serial.println("  - WiFi credentials are correct");
-        Serial.println("  - WiFi network is in range");
-        Serial.println("  - WiFi network is operational");
+    // Start NTP client and attempt initial sync.
+    timeClient.begin();
+    timeClient.update();
+    unsigned long epoch = timeClient.getEpochTime();
+    if (epoch != 0) {
+        Serial.print("NTP time: ");
+        Serial.println(epoch);
+    } else {
+        Serial.println("NTP sync failed");
     }
 }
 
@@ -308,161 +400,7 @@ void loop()
         lcd.print(lvlBuf);
     }
 
-    // Handle incoming HTTP clients.
-    WiFiClient client = server.available();
-    if (!client) {
-        delay(10);
-        return;
-    }
-
-    Serial.println("New HTTP client");
-
-    // Read request (2 second timeout).
-    String request = "";
-    unsigned long start = millis();
-    while (client.connected() && (millis() - start) < 2000) {
-        while (client.available()) {
-            char c = client.read();
-            request += c;
-            if (request.endsWith("\r\n\r\n")) break;
-        }
-        if (request.endsWith("\r\n\r\n")) break;
-    }
-
-    Serial.println("Request:");
-    Serial.println(request);
-
-    // Simple request routing.
-    // Image endpoint: perform an on-demand capture and attempt to stream the JPEG
-    // directly to the client in small chunks to avoid large RAM buffer.
-    if (request.indexOf("GET /image") >= 0) {
-        if (!cameraEnabled) {
-            client.println("HTTP/1.1 503 Service Unavailable");
-            client.println("Content-Type: text/plain; charset=utf-8");
-            client.println("Connection: close");
-            client.println();
-            client.println("Camera disabled on device");
-        } else {
-            // Start capture.
-            myCAM.flush_fifo();
-            myCAM.clear_fifo_flag();
-            myCAM.start_capture();
-            unsigned long startCap = millis();
-            while (!myCAM.get_bit(ARDUCHIP_TRIG, CAP_DONE_MASK)) {
-                if (millis() - startCap > 2000) break;
-            }
-
-            uint32_t length = myCAM.read_fifo_length();
-            if (length == 0) {
-                // No image captured — return a 204-like empty response.
-                client.println("HTTP/1.1 204 No Content");
-                client.println("Connection: close");
-                client.println();
-            } else if (length > MAX_STREAM_BYTES) {
-                // Too large to safely stream on this device with current memory
-                // settings. Discard FIFO and notify client.
-                myCAM.clear_fifo_flag();
-                Serial.print("Captured JPEG too large: ");
-                Serial.print(length);
-                Serial.println(" bytes — rejecting to save RAM");
-                client.println("HTTP/1.1 413 Payload Too Large");
-                client.println("Content-Type: text/plain; charset=utf-8");
-                client.println("Connection: close");
-                client.println();
-                client.println("Image too large for device (increase limit or lower camera resolution)");
-            } else {
-                client.println("HTTP/1.1 200 OK");
-                client.println("Content-Type: image/jpeg");
-                client.print("Content-Length: ");
-                client.println(length);
-                client.println("Connection: close");
-                client.println();
-
-                // Stream FIFO directly to client in chunks.
-                myCAM.CS_LOW();
-                myCAM.set_fifo_burst();
-                uint8_t chunkBuf[CAM_CHUNK];
-                for (uint32_t sent = 0; sent < length; sent += CAM_CHUNK) {
-                    uint32_t chunk = (length - sent > CAM_CHUNK) ? CAM_CHUNK : (length - sent);
-                    for (uint32_t i = 0; i < chunk; i++) {
-                        chunkBuf[i] = SPI.transfer(0x00);
-                    }
-                    client.write(chunkBuf, chunk);
-                }
-                myCAM.CS_HIGH();
-                myCAM.clear_fifo_flag();
-                Serial.print("Streamed JPEG: ");
-                Serial.print(length);
-                Serial.println(" bytes");
-            }
-        }
-    }
-
-    if (request.indexOf("GET /status") >= 0) {
-        // Return JSON status object
-        String ip = WiFi.localIP().toString();
-        bool connected = (WiFi.status() == WL_CONNECTED);
-
-        client.println("HTTP/1.1 200 OK");
-        client.println("Content-Type: application/json");
-        client.println("Connection: close");
-        client.println();
-        client.print("{\"connected\":");
-        client.print(connected ? "true" : "false");
-        client.print(",\"ip\":\"");
-        if (connected) client.print(ip);
-        client.print("\",");
-        client.print("\"cameraDetected\":");
-        client.print(cameraDetectedAtInit ? "true" : "false");
-        client.print("}");
-    }
-    // Sensor endpoint returns latest DHT readings.
-    else if (request.indexOf("GET /sensor") >= 0) {
-        client.println("HTTP/1.1 200 OK");
-        client.println("Content-Type: application/json");
-        client.println("Connection: close");
-        client.println();
-        client.print("{\"temperature\":");
-        if (!isnan(lastTemp)) client.print(lastTemp, 1); else client.print("null");
-        client.print(",\"humidity\":");
-        if (!isnan(lastHum)) client.print(lastHum, 0); else client.print("null");
-        client.print(",\"level\":");
-        if (lastLevel >= 0) client.print(lastLevel); else client.print("null");
-        client.print(",\"pump\":");
-        if (lastLevel >= 0) client.print(lastPumpOn ? "true" : "false"); else client.print("null");
-        client.print("}");
-    }
-    else if (request.indexOf("GET /time") >= 0) {
-        // Update NTP client and get UTC epoch.
-        timeClient.update();
-        unsigned long nowEpoch = timeClient.getEpochTime();
-
-        // Compute UK-local epoch (apply BST when needed).
-        unsigned long local = ukLocalEpoch(nowEpoch);
-
-        // Format datetime as DD/MM/YYYY HH:MM (24-hour).
-        DateTimeStruct localDT = epochToDateTime(local);
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%02u/%02u/%04u %02u:%02u",
-            localDT.day, localDT.month, localDT.year, localDT.hour, localDT.minute);
-
-        client.println("HTTP/1.1 200 OK");
-        client.println("Content-Type: application/json");
-        client.println("Connection: close");
-        client.println();
-        client.print("{\"datetime\":\"");
-        client.print(buf);
-        client.print("\"}");
-    }
-    else {
-        // Serve index page (dashboard HTML).
-        client.println("HTTP/1.1 200 OK");
-        client.println("Content-Type: text/html; charset=utf-8");
-        client.println("Connection: close");
-        client.println();
-        client.println(INDEX_PAGE);
-    }
-
+    // Let the UnoR4WiFi_WebServer handle incoming HTTP requests and routing.
+    server.handleClient();
     delay(1);
-    client.stop();
 }
