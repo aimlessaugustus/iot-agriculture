@@ -13,11 +13,7 @@ const char* INDEX_PAGE = R"rawliteral(
     <div class="card shadow-sm rounded mx-auto overflow-hidden" style="max-width:520px;">
         <div class="d-flex p-3 gap-3 align-items-center bg-light border-bottom">
             <div class="flex-shrink-0 bg-secondary overflow-hidden rounded" style="width:160px;height:120px;">
-                <img id="cam" src="" alt="Camera (disabled)" style="width:100%;height:100%;object-fit:cover;display:block;" />
-                <!--
-                image src below used for Arducam Preview
                 <img id="cam" src="/image?t=0" alt="Camera" style="width:100%;height:100%;object-fit:cover;display:block;" />
-                -->
             </div>
             <div class="flex-grow-1">
                 <h5 class="mb-1">Smart Agriculture System</h5>
@@ -99,8 +95,7 @@ async function fetchSensor(){
     fetchSensor();
     setInterval(fetchSensor, 5000);
 
-    /*
-    Arducam image fetch (disabled to stop buffers)
+    // Arducam image fetch — refresh periodically to update preview
     async function fetchImage(){
         try{
             const timestamp = Date.now();
@@ -109,9 +104,9 @@ async function fetchSensor(){
             // ignore image fetch errors
         }
     }
+    // initial load and periodic refresh every 5 seconds
     fetchImage();
-    setInterval(fetchImage, 15000);
-    */
+    setInterval(fetchImage, 5000);
 </script>
 </body>
 </html>

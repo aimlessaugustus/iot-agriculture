@@ -1,12 +1,13 @@
 #include <WiFiS3.h>
 #include "arduino_secrets.h"
-// Use NTP instead of the RTC library to save RAM
+// Use NTP instead of the RTC library for time
 #include <WiFiUdp.h>
 #include <NTPClient.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
 // Camera (ArduCAM Mini OV2640)
+#define OV2640_MINI_2MP
 // Using R4-compatible fork: https://github.com/keeeal/ArduCAM-Arduino-Uno-R4
 #include <SPI.h>
 #include "memorysaver.h"
@@ -69,8 +70,13 @@ bool lastPumpOn = false;
 
 // Set a small per-chunk buffer for camera streaming
 const size_t CAM_CHUNK = 64;
-// Limit streamed bytes per capture to avoid long transfers and memory pressure
-const uint32_t MAX_STREAM_BYTES = 2048; // 2 KB
+const uint32_t MAX_STREAM_BYTES = 32768; // 32 KB safety bound
+
+// We stream images on-demand in small chunks to avoid allocating large
+// global buffers that can overflow the device RAM. The per-chunk buffer
+// below is intentionally small (64 bytes) so the code stays within RAM limits.
+// Note: the previous implementation used a 16 KB static cache which can
+// exceed available RAM on the Arduino.
 
 // Digital pin D7 for the relay. Relay is active high
 #define RELAY_PIN 7
@@ -206,57 +212,71 @@ void handleImage(WiFiClient& client, const String& method, const String& request
         return;
     }
 
-    // Start capture.
+    // Perform a fresh capture and stream the JPEG directly to the client
+    // using a small temporary buffer to avoid large RAM use.
+    // Start capture
     myCAM.flush_fifo();
     myCAM.clear_fifo_flag();
     myCAM.start_capture();
-    unsigned long startCap = millis();
+
+    unsigned long t0 = millis();
     while (!myCAM.get_bit(ARDUCHIP_TRIG, CAP_DONE_MASK)) {
-        if (millis() - startCap > 2000) break;
+        if (millis() - t0 > 2000) break;
     }
 
-    uint32_t length = myCAM.read_fifo_length();
-    if (length == 0) {
+    uint32_t len = myCAM.read_fifo_length();
+    // (No debug prints here) If needed enable Serial logs elsewhere.
+    if (len == 0) {
+        myCAM.clear_fifo_flag();
         client.println("HTTP/1.1 204 No Content");
         client.println("Connection: close");
         client.println();
         return;
-    } else if (length > MAX_STREAM_BYTES) {
+    }
+    if (len >= MAX_STREAM_BYTES) {
+        // If the frame is too large, log and return a 413 so
+        // the client can tell the difference between empty and oversized.
         myCAM.clear_fifo_flag();
-        Serial.print("Captured JPEG too large: ");
-        Serial.print(length);
-        Serial.println(" bytes — rejecting to save RAM");
+        Serial.println("handleImage: captured frame too large, rejecting");
         client.println("HTTP/1.1 413 Payload Too Large");
         client.println("Content-Type: text/plain; charset=utf-8");
         client.println("Connection: close");
         client.println();
-        client.println("Image too large for device (increase limit or lower camera resolution)");
+        client.println("Captured image too large");
         return;
-    } else {
-        client.println("HTTP/1.1 200 OK");
-        client.println("Content-Type: image/jpeg");
-        client.print("Content-Length: ");
-        client.println(length);
-        client.println("Connection: close");
-        client.println();
-
-        myCAM.CS_LOW();
-        myCAM.set_fifo_burst();
-        uint8_t chunkBuf[CAM_CHUNK];
-        for (uint32_t sent = 0; sent < length; sent += CAM_CHUNK) {
-            uint32_t chunk = (length - sent > CAM_CHUNK) ? CAM_CHUNK : (length - sent);
-            for (uint32_t i = 0; i < chunk; i++) {
-                chunkBuf[i] = SPI.transfer(0x00);
-            }
-            client.write(chunkBuf, chunk);
-        }
-        myCAM.CS_HIGH();
-        myCAM.clear_fifo_flag();
-        Serial.print("Streamed JPEG: ");
-        Serial.print(length);
-        Serial.println(" bytes");
     }
+
+    // Send headers now that we know the content length
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: image/jpeg");
+    client.print("Content-Length: "); client.println(len);
+    client.println("Connection: close");
+    client.println();
+
+    // Stream the FIFO directly in small chunks
+    myCAM.CS_LOW();
+    myCAM.set_fifo_burst();
+    const size_t BUF_SZ = CAM_CHUNK; // small stack buffer
+    uint8_t buf[BUF_SZ];
+    uint32_t remaining = len;
+    uint32_t streamed = 0;
+    // Read and send in chunks
+    while (remaining) {
+        size_t toRead = (remaining > BUF_SZ) ? BUF_SZ : remaining;
+        for (size_t i = 0; i < toRead; ++i) {
+            buf[i] = SPI.transfer(0x00);
+        }
+        client.write(buf, toRead);
+        remaining -= toRead;
+        streamed += toRead;
+        // Small delay to yield to other tasks and the client
+        delayMicroseconds(50);
+    }
+    myCAM.CS_HIGH();
+    myCAM.clear_fifo_flag();
 }
+
+// Debug endpoint removed
 
 void setup()
 {
@@ -294,16 +314,18 @@ void setup()
         cameraDetectedAtInit = true;
     }
 
-    // Perform full camera initialisation only when the camera is enabled
-    // and a module responded to the SPI test
-    if (cameraEnabled && cameraDetectedAtInit) {
+    // Perform camera initialisation when a module responded to the SPI test.
+    // Initialise the sensor and set a modest
+    // JPEG resolution (320x240) so captured frames are reasonably sized.
+    if (cameraDetectedAtInit) {
         myCAM.set_format(JPEG);
         myCAM.InitCAM();
-        // Set a smaller JPEG resolution to reduce frame size (160x120)
-        myCAM.OV2640_set_JPEG_size(OV2640_160x120);
-    } else if (!cameraEnabled) {
-        Serial.println("Camera functionality disabled (cameraEnabled=false)");
-    } else if (!cameraDetectedAtInit) {
+        // Default to a small preview size for periodic dashboard captures
+        myCAM.OV2640_set_JPEG_size(OV2640_320x240);
+        // Enable camera functionality when initialisation succeeds.
+        cameraEnabled = true;
+        Serial.println("ArduCAM initialised (JPEG 320x240)");
+    } else {
         Serial.println("Camera not present, skipping initialisation");
     }
 
@@ -342,6 +364,7 @@ void setup()
     } else {
         Serial.println("NTP sync failed");
     }
+
 }
 
 void loop()
