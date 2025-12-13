@@ -1,5 +1,5 @@
 // Capture a single small JPEG from an OV2640 every minute and write to Serial.
-// SPI CS pin is 10 (as requested).
+// SPI CS pin is 10
 
 #include <Wire.h>
 #include <SPI.h>
