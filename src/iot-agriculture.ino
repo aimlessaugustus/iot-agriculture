@@ -5,8 +5,9 @@
  * Features:
  *  - WiFi web dashboard (UnoR4WiFi_WebServer)
  *  - NTP-based timekeeping
- *  - DHT temperature/humidity sensor
  *  - I2C LCD status display
+ *  - DHT temperature/humidity sensor
+ *  - Analogue water level sensor to control a relay-driven pump
  *  - ArduCAM OV2640 on-demand JPEG snapshot streaming
  *
  * Important configuration constants and hardware pins are defined in this
@@ -52,6 +53,32 @@ NTPClient timeClient(ntpUDP, "uk.pool.ntp.org", 0, 60000);
 /** Support I2C LCD at address 0x27. SDA is A4 and SCL is A5 */
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
+/** === Display timing === */
+unsigned long lastDisplay = 0;
+const unsigned long displayInterval = 5000;
+
+/** === DHT sensor === */
+/** Digital pin D5 for DHT11 data. */
+#define DHTPIN 5
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+/** Store latest sensor values updated from the DHT */
+float lastTemp = NAN;
+float lastHum = NAN;
+
+/** === Water level sensor === */
+/** Analogue pin A0 for water level */
+#define WATER_PIN A0
+/** Store water level as 0 to 100 per cent and use -1 for unknown */
+int lastLevel = -1;
+
+/** === Relay / Pump control === */
+/** Digital pin D7 for the relay. Relay is active high. */
+#define RELAY_PIN 7
+#define RELAY_ACTIVE_HIGH 1
+/** Store recent pump state for the web UI */
+bool lastPumpOn = false;
+
 /** === ArduCAM configuration === */
 /** SPI pins: SCK=D13 MISO=D12 MOSI=D11 CS=D10. Share I2C with LCD for SDA/SCL. */
 #define CAM_CS_PIN 10
@@ -63,38 +90,11 @@ bool cameraEnabled = false;
 // Record whether a camera was detected during initialisation
 bool cameraDetectedAtInit = false;
 
-/** === DHT sensor === */
-/** Digital pin D5 for DHT11 data. */
-#define DHTPIN 5
-#define DHTTYPE DHT11
-DHT dht(DHTPIN, DHTTYPE);
-
-/** Display update timing in milliseconds */
-unsigned long lastDisplay = 0;
-const unsigned long displayInterval = 5000;
-
-/** Store latest sensor values updated from the DHT */
-float lastTemp = NAN;
-float lastHum = NAN;
-
-/** === Water level sensor === */
-/** Analogue pin A0 for water level */
-#define WATER_PIN A0
-/** Store water level as 0 to 100 per cent and use -1 for unknown */
-int lastLevel = -1;
-/** Store recent pump state for the web UI */
-bool lastPumpOn = false;
-
 /** === Camera streaming configuration === */
 /** Set a small per-chunk buffer for camera streaming (working around the large RAM buffer issues in testing). */
 const size_t CAM_CHUNK = 64;
 /** Safety upper bound for streamed frames (does not allocate this RAM). */
 const uint32_t MAX_STREAM_BYTES = 32768; // 32 KB safety bound
-
-/** === Relay configuration === */
-/** Digital pin D7 for the relay. Relay is active high. */
-#define RELAY_PIN 7
-#define RELAY_ACTIVE_HIGH 1
 
 /** === Time helpers (epoch to date conversion without RTClib) === */
 /** Converts epoch seconds to year, month, day, hour, minute, second. */
@@ -271,7 +271,7 @@ void handleTime(WiFiClient &client, const String &method, const String &request,
  * @brief Capture a fresh JPEG frame and stream it to the client.
  *
  * This handler performs a blocking capture (with a short timeout) and then
- * streams the FIFO contents in small chunks to avoid large RAM usage.
+ * streams the FIFO contents in small chunks to avoid ram errors.
  *
  * Responses:
  *  - 200 + image/jpeg when a valid JPEG is captured
@@ -298,6 +298,8 @@ void handleImage(WiFiClient &client, const String &method, const String &request
     myCAM.clear_fifo_flag();
     myCAM.start_capture();
 
+
+    // Defining 2 second timeout for capture completion.
     unsigned long t0 = millis();
     while (!myCAM.get_bit(ARDUCHIP_TRIG, CAP_DONE_MASK))
     {
@@ -305,6 +307,7 @@ void handleImage(WiFiClient &client, const String &method, const String &request
             break;
     }
 
+    // If length is zero, return 204 No Content as camera is not capturing frames.
     uint32_t len = myCAM.read_fifo_length();
     if (len == 0)
     {
@@ -317,7 +320,7 @@ void handleImage(WiFiClient &client, const String &method, const String &request
     if (len >= MAX_STREAM_BYTES)
     {
         // If the frame is too large, log and return a 413 so
-        // the client can tell the difference between empty and oversized.
+        // the client can tell the difference between empty and oversized frames.
         myCAM.clear_fifo_flag();
         Serial.println("handleImage: captured frame too large, rejecting");
         client.println("HTTP/1.1 413 Payload Too Large");
@@ -328,7 +331,7 @@ void handleImage(WiFiClient &client, const String &method, const String &request
         return;
     }
 
-    // Send headers with calculated content length
+    // Send headers with calculated content length.
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: image/jpeg");
     client.print("Content-Length: ");
