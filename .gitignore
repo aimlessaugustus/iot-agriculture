@@ -10,3 +10,5 @@ Thumbs.db
 *.swp
 *.swo
 *~
+docs/data-flow-diagram.md
+docs/data-flow-diagram.drawio

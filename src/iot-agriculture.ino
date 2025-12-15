@@ -42,7 +42,7 @@ char ssid[] = SECRET_SSID;
 char password[] = SECRET_PASS;
 
 /** === Time sources === */
-/** Use NTP as the primary time source */
+/** Use NTP as the primary time source (previously dabbled with RTC)*/
 bool rtcPresent = false;
 
 // Use NTP client in UTC and refresh every 60 seconds
@@ -78,6 +78,12 @@ int lastLevel = -1;
 #define RELAY_ACTIVE_HIGH 1
 /** Store recent pump state for the web UI */
 bool lastPumpOn = false;
+/** Hysteresis (percent) to prevent rapid pump toggling around threshold. */
+#ifndef SECRET_PUMP_HYSTERESIS
+const int PUMP_HYSTERESIS = 5;
+#else
+const int PUMP_HYSTERESIS = SECRET_PUMP_HYSTERESIS;
+#endif
 
 /** === ArduCAM configuration === */
 /** SPI pins: SCK=D13 MISO=D12 MOSI=D11 CS=D10. Share I2C with LCD for SDA/SCL. */
@@ -499,11 +505,20 @@ void loop()
             level = 100;
         lastLevel = level;
 
-        // Determine pump state by comparing level to target.
+        // Determine pump state by comparing level to target using hysteresis.
         bool pumpOn = false;
         if (lastLevel >= 0)
         {
-            pumpOn = (lastLevel < SECRET_TARGET_LEVEL);
+            if (!lastPumpOn)
+            {
+                // currently off: turn on when level falls strictly below target
+                pumpOn = (lastLevel < SECRET_TARGET_LEVEL);
+            }
+            else
+            {
+                // currently on: stay on until level rises above target + hysteresis
+                pumpOn = (lastLevel <= (SECRET_TARGET_LEVEL + PUMP_HYSTERESIS));
+            }
         }
         // Publish the last pump state so the web endpoint can report it.
         lastPumpOn = pumpOn;
@@ -524,8 +539,6 @@ void loop()
                 digitalWrite(RELAY_PIN, HIGH);
         }
 
-        // Publish the last pump state so the web endpoint can report it.
-        lastPumpOn = pumpOn;
 
         // Prepare and print two fixed-width (16 char) LCD lines now that pump state
         // is known.
