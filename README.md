@@ -36,8 +36,6 @@ dedicated farming platforms such as Farmobile, CropX or FarmX.
 	- iot-agriculture-mqtt.ino — MQTT-based telemetry/control
 	- index_page.h — Embedded HTML for the HTTP dashboard
 	- arduino_secrets.h — Define Wi‑Fi/MQTT/pump settings (user-provided)
-- docs/: Design notes and artifacts
-- hardware/: Hardware notes and pin mappings
 
 ## Common Configuration
 
