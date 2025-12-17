@@ -23,8 +23,13 @@ const char* INDEX_PAGE = R"rawliteral(
         </div>
         <ul class="list-group list-group-flush">
             <li class="list-group-item d-flex justify-content-between align-items-center">
-                <span class="text-muted small">Temperature</span>
-                <span id="temp" class="fw-semibold">Loading…</span>
+                <div>
+                    <span class="text-muted small">Temperature</span>
+                </div>
+                <div class="text-end">
+                    <div id="temp" class="fw-semibold">Loading…</div>
+                    <div id="tempStatus" class="small text-success">Loading…</div>
+                </div>
             </li>
             <li class="list-group-item d-flex justify-content-between align-items-center">
                 <span class="text-muted small">Humidity</span>
@@ -86,6 +91,23 @@ async function fetchSensor(){
         document.getElementById('hum').textContent = j.humidity !== null ? (j.humidity + ' %') : 'N/A';
         document.getElementById('level').textContent = j.level !== null ? (j.level + ' %') : 'N/A';
         document.getElementById('pump').textContent = j.pump !== null ? (j.pump ? 'On' : 'Off') : 'N/A';
+
+        // Temperature status: show warning from server or indicate Good
+        const statusEl = document.getElementById('tempStatus');
+        if (j.warning !== null && typeof j.warning !== 'undefined') {
+            statusEl.textContent = j.warning;
+            statusEl.classList.remove('text-success');
+            statusEl.classList.add('text-danger');
+        } else if (j.temperature === null) {
+            statusEl.textContent = 'N/A';
+            statusEl.classList.remove('text-danger');
+            statusEl.classList.add('text-muted');
+        } else {
+            statusEl.textContent = 'Good';
+            statusEl.classList.remove('text-danger');
+            statusEl.classList.remove('text-muted');
+            statusEl.classList.add('text-success');
+        }
     }catch(e){
         document.getElementById('temp').textContent = 'Error';
         document.getElementById('hum').textContent = 'Error';

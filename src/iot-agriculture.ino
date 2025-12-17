@@ -246,6 +246,14 @@ void handleSensor(WiFiClient &client, const String &method, const String &reques
         client.print(lastPumpOn ? "true" : "false");
     else
         client.print("null");
+
+    // Add a warning field for dashboard when temperature exceeds 30°C
+    client.print(",\"warning\":");
+    if (!isnan(lastTemp) && lastTemp > 30.0)
+        client.print("\"High temperature (>30°C)\"");
+    else
+        client.print("null");
+
     client.print("}");
 }
 

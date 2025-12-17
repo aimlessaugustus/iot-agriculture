@@ -136,6 +136,10 @@ The sketches are built in the Arduino IDE using the Arduino UNO R4 WiFi board. R
 - When off, it turns on only when level falls strictly below `TARGET`.
 - MQTT variant also supports `on/off/auto` commands.
 
+## Temperature warning
+
+- The dashboard provides a simple temperature status. When the measured temperature exceeds 30°C (RHS upper limit for many UK crops) the `/sensor` endpoint returns a non-null `warning` string and the web UI displays a red warning; otherwise the dashboard shows "Good". This gives a quick visual cue for potentially harmful heat conditions.
+
 ## Notes & Troubleshooting
 
 - If using the camera on UNO R4, install the UNO R4‑compatible ArduCAM fork and keep the JPEG size definition small.
